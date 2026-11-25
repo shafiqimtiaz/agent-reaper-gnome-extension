@@ -36,18 +36,10 @@ function readMode() {
     }
 }
 
-function writeMode(auto) {
-    const file = Gio.File.new_for_path(modePath());
-    try {
-        file.get_parent().make_directory_with_parents(null);
-    } catch {
-    }
-    try {
-        file.replace_contents(new TextEncoder().encode(auto ? 'auto' : 'manual'),
-            null, false, Gio.FileCreateFlags.REPLACE_DESTINATION, null);
-    } catch (e) {
-        logError(e, 'Could not save the Agent Reaper mode');
-    }
+// Carry an auto mode picked in 2.2 over to GSettings.
+function migrateMode(settings) {
+    if (settings.get_user_value('auto-reap') === null && readMode())
+        settings.set_boolean('auto-reap', true);
 }
 
 const megabytes = rows => rows.reduce((sum, c) => sum + c.rss + c.swap, 0);
@@ -342,7 +334,13 @@ export default class AgentReaperExtension extends Extension {
         this._gicon = Gio.icon_new_for_string(GLib.build_filenamev([this.path, 'icons', 'agent-reaper-symbolic.svg']));
         this._notified = new Set();
         this._busy = false;
-        this._auto = readMode();
+        this._settings = this.getSettings();
+        migrateMode(this._settings);
+        this._auto = this._settings.get_boolean('auto-reap');
+        this._settingsSignal = this._settings.connect('changed', (_settings, key) => {
+            if (key === 'auto-reap')
+                this.setAuto(_settings.get_boolean('auto-reap'));
+        });
         this._first = this._timer = 0;
         this._indicator = new Indicator(this, this._gicon);
         Main.panel.addToStatusArea(this.uuid, this._indicator);
@@ -353,11 +351,15 @@ export default class AgentReaperExtension extends Extension {
         return this._auto;
     }
 
+    get minAge() {
+        return this._settings.get_int('min-age-hours') * 3600;
+    }
+
     setAuto(auto) {
         if (this._auto === auto)
             return;
         this._auto = auto;
-        writeMode(auto);
+        this._settings.set_boolean('auto-reap', auto);
         this._indicator?.setAuto(auto);
         this._schedule();
         if (auto)
@@ -400,6 +402,8 @@ export default class AgentReaperExtension extends Extension {
         this._auto = false;
         this._indicator?.destroy();
         this._indicator = null;
+        this._settings.disconnect(this._settingsSignal);
+        this._settings = null;
         this._cancellable.cancel();
         this._cancellable = null;
         if (this._source) {
@@ -417,7 +421,7 @@ export default class AgentReaperExtension extends Extension {
         this._busy = true;
         this._indicator?.showBusy('Auto reaping…');
         try {
-            const result = await reapTasks(this._cancellable);
+            const result = await reapTasks(this._cancellable, this.minAge);
             if (!this._indicator)
                 return;
             if (result.cleanup?.killed)
@@ -436,7 +440,7 @@ export default class AgentReaperExtension extends Extension {
         this._busy = true;
         this._indicator.showBusy('Scanning…');
         try {
-            const {result} = await scan(this._cancellable);
+            const {result} = await scan(this._cancellable, this.minAge);
             this._indicator?.showResult(result);
             if (notify && this._indicator)
                 this._notifyNew(result.candidates);
@@ -453,7 +457,7 @@ export default class AgentReaperExtension extends Extension {
         this._busy = true;
         this._indicator.showBusy('Reaping…');
         try {
-            const c = (await reapTasks(this._cancellable)).cleanup;
+            const c = (await reapTasks(this._cancellable, this.minAge)).cleanup;
             if (!this._indicator)
                 return;
             await this._indicator.reap();

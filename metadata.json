@@ -5,6 +5,7 @@
   "shell-version": [
     "46"
   ],
+  "settings-schema": "org.gnome.shell.extensions.agent-reaper",
   "url": "https://github.com/shafiqimtiaz/agent-reaper-gnome-extension",
-  "version-name": "2.2"
+  "version-name": "2.3"
 }

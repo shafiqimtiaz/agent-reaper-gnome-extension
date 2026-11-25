@@ -25,7 +25,8 @@ environment carries the marker its agent sets for every command it runs:
 | Cursor | `CURSOR_AGENT` |
 | Antigravity | an `/antigravity` path in its environment |
 
-Of those, it reaps only what is older than one hour and is:
+Of those, it reaps only what is older than the minimum age (one hour by
+default) and is:
 
 - a stopped agent session whose terminal is gone
 - an orphaned task (its parent exited)
@@ -40,8 +41,9 @@ in `reaper.js`.
 
 ## Modes
 
-The menu has an **Auto reap every 15 minutes** switch. The choice is remembered
-between sessions in `~/.local/state/agent-reaper-mode`.
+The menu has an **Auto reap every 15 minutes** switch, and so does the settings
+window (see below). The choice is stored in GSettings; a mode saved by 2.2 in
+`~/.local/state/agent-reaper-mode` is picked up on the first start.
 
 - **Manual** (default): checks every hour in the background and notifies you
   when new stale processes appear. The notification has a **Reap now** button.
@@ -52,6 +54,22 @@ between sessions in `~/.local/state/agent-reaper-mode`.
   - orange scythe with a count: leftovers are waiting for the next sweep
   - green badge with a number: that many tasks were reaped by the last sweep
   - red scythe: the last scan or reap failed; open the menu for the error
+
+## Settings
+
+The Extensions app shows a settings button for Agent Reaper. It opens a
+preferences window that can also be reached with:
+
+```sh
+gnome-extensions prefs agent-reaper@shafiqimtiaz.github.io
+```
+
+- **Auto reap**: same switch as in the menu; changing it either way takes
+effect immediately.
+- **Minimum age**: how old a task must be before it counts as leftover, from 1
+to 24 hours (default 1).
+
+The values live in GSettings under `org.gnome.shell.extensions.agent-reaper`.
 
 ## How it works
 
@@ -69,9 +87,13 @@ Requires GNOME Shell 46. Everything is plain GJS; nothing else to install.
 
 ```sh
 git clone https://github.com/shafiqimtiaz/agent-reaper-gnome-extension.git
-ln -s "$PWD/agent-reaper-gnome-extension" \
-  ~/.local/share/gnome-shell/extensions/agent-reaper@shafiqimtiaz.github.io
+cd agent-reaper-gnome-extension
+glib-compile-schemas schemas/
+ln -s "$PWD" ~/.local/share/gnome-shell/extensions/agent-reaper@shafiqimtiaz.github.io
 ```
+
+Run `glib-compile-schemas schemas/` again after changing the schema in
+`schemas/`; the settings window and the extension need the compiled copy.
 
 Restart GNOME Shell (X11: Alt+F2, `r`, Enter; Wayland: log out and in), then:
 

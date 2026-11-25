@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.gnome.shell.extensions.agent-reaper" path="/org/gnome/shell/extensions/agent-reaper/">
+    <key name="auto-reap" type="b">
+      <default>false</default>
+      <summary>Auto reap</summary>
+      <description>Reap leftover tasks every 15 minutes without asking.</description>
+    </key>
+    <key name="min-age-hours" type="i">
+      <default>1</default>
+      <range min="1" max="24"/>
+      <summary>Minimum age</summary>
+      <description>Only reap tasks that are at least this many hours old.</description>
+    </key>
+  </schema>
+</schemalist>
