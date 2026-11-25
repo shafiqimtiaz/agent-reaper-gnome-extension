@@ -358,21 +358,20 @@ export default class AgentReaperExtension extends Extension {
             GLib.source_remove(this._timer);
             this._timer = 0;
         }
-        if (this._auto) {
-            this._timer = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, AUTO_SECONDS, () => {
+        const auto = this._auto;
+        this._timer = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, auto ? AUTO_SECONDS : CHECK_SECONDS, () => {
+            if (auto)
                 this.sweep();
-                return GLib.SOURCE_CONTINUE;
-            });
+            else
+                this.check(true);
+            return GLib.SOURCE_CONTINUE;
+        });
+        if (auto)
             return;
-        }
         this._first = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, FIRST_CHECK_SECONDS, () => {
             this._first = 0;
             this.check(true);
             return GLib.SOURCE_REMOVE;
-        });
-        this._timer = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, CHECK_SECONDS, () => {
-            this.check(true);
-            return GLib.SOURCE_CONTINUE;
         });
     }
 
