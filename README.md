@@ -7,29 +7,46 @@ Agents such as Claude Code, Codex and others start shells, MCP servers and dev
 servers. When an agent is stopped or its terminal closes, these processes stay
 alive and hold memory and swap. Agent Reaper finds them.
 
+![Agent Reaper menu](assets/menu.png)
+
 ## What it finds
 
-Only processes of the current user that are older than one hour:
+Only leftovers of AI coding agents. A process counts as agent work when its
+environment carries the marker its agent sets for every command it runs:
 
-- stopped agent processes whose parent is gone
-- orphaned shells that only run agent or dev-server work
-- orphaned Python multiprocessing workers and MCP servers
-- dev servers (Vite, esbuild, npm run and others) whose folder was deleted
-- agent processes that hold 3 or more zombie processes
+| Agent | Marker |
+|---|---|
+| Claude Code | `CLAUDECODE`, `CLAUDE_PID` |
+| OpenCode | `OPENCODE` |
+| Codex | `CODEX_THREAD_ID`, `CODEX_SESSION_ID`, `CODEX_SANDBOX` |
+| Gemini CLI | `GEMINI_CLI` |
+| Codebuff / Freebuff | `CODEBUFF_LAUNCHER_PID` |
+| pi | `PI_CODING_AGENT` |
+| Cursor | `CURSOR_AGENT` |
+| Antigravity | an `/antigravity` path in its environment |
 
-It never touches the session that runs it, browsers, databases, Docker,
-Ollama, GNOME or the other apps in its protect list. See `PROTECT` in
-`agent-reaper.py`, and edit it for your own apps.
+Of those, it reaps only what is older than one hour and is:
+
+- a stopped agent session whose terminal is gone
+- an orphaned task (its parent exited)
+- a task left by a closed session (the agent process is gone and the task has no terminal)
+- a task whose working folder was deleted
+- an agent that holds 3 or more zombie processes
+
+Live sessions and their tasks, tasks in an open terminal, and anything without
+an agent marker are never touched. Neither are the session that runs the
+scan, browsers, databases, Docker, Ollama, GNOME or the apps in `PROTECT`
+in `agent-reaper.py`.
 
 ## How it works
 
-- Click the icon: it shows each stale process with its age, memory and swap.
+- Click the icon: it shows the leftovers grouped by agent, with the reason, age and memory of each.
 - **Clean now** kills them: children first, then the parent. It sends SIGTERM,
   waits 5 seconds, then sends SIGKILL to what is left. Each kill is logged to
   `~/.local/state/agent-reaper.log`.
 - Every hour it checks in the background and notifies you when new stale
   processes appear. The notification has a **Clean** button.
-- The icon turns orange with a count when something is stale.
+- The number left of the scythe counts the leftovers. It swipes away when you reap.
 
 ## Install
 

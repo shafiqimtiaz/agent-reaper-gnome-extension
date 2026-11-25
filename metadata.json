@@ -1,7 +1,10 @@
 {
   "uuid": "agent-reaper@shafiqimtiaz.github.io",
   "name": "Agent Reaper",
-  "description": "Finds stale processes left by AI coding agents (stopped sessions, orphaned shells, MCP servers, dev servers on deleted folders) and kills them from the top bar.",
-  "shell-version": ["46"],
-  "url": "https://github.com/shafiqimtiaz/agent-reaper-gnome-extension"
+  "description": "Finds background tasks that AI coding agents (Claude Code, OpenCode, Codex, Gemini CLI, Antigravity and others) left running and reaps them from the top bar.",
+  "shell-version": [
+    "46"
+  ],
+  "url": "https://github.com/shafiqimtiaz/agent-reaper-gnome-extension",
+  "version-name": "2.0"
 }

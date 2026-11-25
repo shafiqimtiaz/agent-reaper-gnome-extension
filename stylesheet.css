@@ -1,13 +1,169 @@
-.agent-reaper-due .system-status-icon,
-.agent-reaper-due .agent-reaper-count {
-  color: #f5a623;
+.ar-due .system-status-icon {
+  color: #ff7a3d;
 }
 
-.agent-reaper-error .system-status-icon {
-  color: #e01b24;
+.ar-error .system-status-icon {
+  color: #ff5c5c;
 }
 
-.agent-reaper-count {
-  margin-left: 4px;
+.ar-badge {
+  margin-right: 5px;
+  padding: 0 6px;
+  border-radius: 8px;
+  background-color: #ff7a3d;
+  color: #1c1410;
+  font-size: 8.5pt;
+  font-weight: 800;
+}
+
+.ar-menu {
+  min-width: 360px;
+  padding-bottom: 4px;
+}
+
+.ar-header {
+  padding: 14px 20px 12px;
+}
+
+.ar-title-row {
+  spacing: 6px;
+  padding-bottom: 6px;
+}
+
+.ar-title-icon {
+  icon-size: 14px;
+  color: #ff7a3d;
+}
+
+.ar-title {
+  font-size: 9pt;
+  font-weight: 700;
+}
+
+.ar-figure {
+  color: #ff7a3d;
+  font-family: "Ubuntu Sans", "Cantarell", sans-serif;
+  font-size: 26pt;
+  font-weight: 800;
+}
+
+.ar-figure-clear {
+  color: #6fd39b;
+}
+
+.ar-figure-error {
+  color: #ff5c5c;
+}
+
+.ar-sub {
+  padding-top: 2px;
+  font-size: 9.5pt;
+}
+
+.ar-group {
+  margin-top: 6px;
+  padding: 8px 20px 4px;
+  spacing: 8px;
+  border-top: 1px solid rgba(128, 128, 128, 0.18);
+}
+
+.ar-group-name {
+  font-size: 9.5pt;
+  font-weight: 700;
+}
+
+.ar-group-meta {
+  font-family: "Ubuntu Sans Mono", "CaskaydiaMono NF", monospace;
+  font-size: 8.5pt;
+}
+
+.ar-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 4px;
+  background-color: #9aa0a6;
+}
+
+.ar-agent-claude { background-color: #d97757; }
+.ar-agent-codex { background-color: #10a37f; }
+.ar-agent-opencode { background-color: #e8e8e8; }
+.ar-agent-gemini { background-color: #4f8df7; }
+.ar-agent-antigravity { background-color: #34a853; }
+.ar-agent-codebuff { background-color: #f2c14e; }
+.ar-agent-pi { background-color: #c3a6ff; }
+.ar-agent-cursor { background-color: #8ab4f8; }
+
+.ar-row {
+  padding: 5px 20px 5px 24px;
+  spacing: 10px;
+}
+
+.ar-bar {
+  width: 2px;
+  border-radius: 1px;
+  background-color: #f2c14e;
+}
+
+.ar-bar-stopped { background-color: #ff7a3d; }
+.ar-bar-zombie { background-color: #ff5c5c; }
+.ar-bar-deleted { background-color: #4cc9c0; }
+.ar-bar-closed { background-color: #e27d9d; }
+
+.ar-name {
+  max-width: 230px;
+  font-family: "Ubuntu Sans Mono", "CaskaydiaMono NF", "DejaVu Sans Mono", monospace;
+  font-size: 10pt;
+}
+
+.ar-meta {
+  padding-top: 1px;
+  font-size: 8.5pt;
+}
+
+.ar-size {
+  min-width: 56px;
+  text-align: right;
+  font-family: "Ubuntu Sans Mono", "CaskaydiaMono NF", monospace;
+  font-size: 9pt;
+}
+
+.ar-more {
+  padding: 4px 20px 2px 36px;
+}
+
+.ar-more-text {
+  font-size: 8.5pt;
+}
+
+.popup-menu-item.ar-reap {
+  margin: 12px 14px 4px;
+  padding: 10px 16px;
+  border-radius: 12px;
+  background-color: rgba(255, 122, 61, 0.15);
+  color: #ff9a66;
   font-weight: bold;
+}
+
+.popup-menu-item.ar-reap:hover,
+.popup-menu-item.ar-reap:focus {
+  background-color: #ff7a3d;
+  color: #1c1410;
+}
+
+.popup-menu-item.ar-reap:insensitive {
+  background-color: rgba(128, 128, 128, 0.1);
+  color: rgba(128, 128, 128, 0.85);
+}
+
+.ar-reap-size {
+  font-family: "Ubuntu Sans Mono", "CaskaydiaMono NF", monospace;
+  font-weight: normal;
+}
+
+.ar-foot {
+  padding: 6px 20px 6px;
+}
+
+.ar-foot-text {
+  font-size: 8pt;
 }

@@ -12,7 +12,14 @@ import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 
 const CHECK_SECONDS = 3600;
 const FIRST_CHECK_SECONDS = 60;
-const ICON = 'edit-clear-all-symbolic';
+const MAX_ROWS = 8;
+const DIM = 140;
+const FAINT = 100;
+const WRAPPERS = new Set(['node', 'python', 'python3', 'bash', 'sh', 'npm', 'npx', 'uv', 'bun', 'deno']);
+const AGENT_STYLE = {
+    'Claude Code': 'claude', 'Codex': 'codex', 'OpenCode': 'opencode', 'Gemini CLI': 'gemini',
+    'Antigravity': 'antigravity', 'Codebuff': 'codebuff', 'pi': 'pi', 'Cursor': 'cursor',
+};
 
 function runReaper(script, args) {
     return new Promise((resolve, reject) => {
@@ -33,70 +40,230 @@ function runReaper(script, args) {
 
 const megabytes = rows => rows.reduce((sum, c) => sum + c.rss + c.swap, 0);
 
-function label(c) {
-    const [first, ...rest] = c.cmd.split(' ');
-    const name = [first.split('/').pop(), ...rest].join(' ');
-    const short = name.length > 45 ? `${name.slice(0, 44)}…` : name;
-    return `${short}  ·  ${c.age_h}h  ·  ${c.rss + c.swap} MB\n${c.reason}`;
+function size(mb) {
+    return mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${mb} MB`;
 }
 
-function infoItem(text) {
-    return new PopupMenu.PopupMenuItem(text, {reactive: false, can_focus: false});
+function age(hours) {
+    return hours >= 48 ? `${Math.round(hours / 24)}d` : hours >= 1 ? `${Math.round(hours)}h` : `${Math.round(hours * 60)}m`;
+}
+
+function taskName(cmd) {
+    const parts = cmd.split(' ').filter(Boolean).map(t => (t.startsWith('/') ? t.split('/').pop() : t));
+    if (WRAPPERS.has(parts[0]) && parts[1] && !parts[1].startsWith('-') && cmd.split(' ').filter(Boolean)[1].includes('/'))
+        parts.shift();
+    const name = parts.join(' ');
+    return name.length > 34 ? `${name.slice(0, 33)}…` : name;
+}
+
+function reasonStyle(reason) {
+    if (reason.startsWith('stopped'))
+        return 'stopped';
+    if (reason.startsWith('holding'))
+        return 'zombie';
+    if (reason.startsWith('folder'))
+        return 'deleted';
+    if (reason.startsWith('left'))
+        return 'closed';
+    return 'orphan';
+}
+
+function label(text, style, opacity = 255) {
+    const l = new St.Label({text, style_class: style, y_align: Clutter.ActorAlign.CENTER});
+    l.opacity = opacity;
+    return l;
+}
+
+function staticItem(style) {
+    return new PopupMenu.PopupBaseMenuItem({activate: false, hover: false, can_focus: false, style_class: style});
+}
+
+function groupByAgent(rows) {
+    const groups = new Map();
+    for (const c of rows) {
+        const agent = c.agent || 'Agent';
+        if (!groups.has(agent))
+            groups.set(agent, []);
+        groups.get(agent).push(c);
+    }
+    return [...groups.entries()].sort((a, b) => megabytes(b[1]) - megabytes(a[1]));
 }
 
 const Indicator = GObject.registerClass(
 class Indicator extends PanelMenu.Button {
-    _init(ext) {
+    _init(ext, gicon) {
         super._init(0.0, 'Agent Reaper');
-        this._box = new St.BoxLayout({style_class: 'panel-status-menu-box'});
-        this._icon = new St.Icon({icon_name: ICON, style_class: 'system-status-icon'});
-        this._count = new St.Label({text: '', y_align: Clutter.ActorAlign.CENTER, style_class: 'agent-reaper-count'});
+        this._box = new St.BoxLayout({style_class: 'panel-status-menu-box ar-panel'});
+        this._icon = new St.Icon({gicon, style_class: 'system-status-icon'});
+        this._icon.set_pivot_point(0.5, 0.9);
+        this._badge = label('', 'ar-badge');
+        this._badge.hide();
+        this._box.add_child(this._badge);
         this._box.add_child(this._icon);
-        this._box.add_child(this._count);
         this.add_child(this._box);
+        this.menu.box.add_style_class_name('ar-menu');
+
+        const header = staticItem('ar-header');
+        const head = new St.BoxLayout({vertical: true, x_expand: true});
+        const titleRow = new St.BoxLayout({style_class: 'ar-title-row'});
+        titleRow.add_child(new St.Icon({gicon, style_class: 'ar-title-icon'}));
+        titleRow.add_child(label('Agent Reaper', 'ar-title', DIM));
+        head.add_child(titleRow);
+        this._figure = label('—', 'ar-figure');
+        this._sub = label('Open to scan', 'ar-sub', DIM);
+        head.add_child(this._figure);
+        head.add_child(this._sub);
+        header.add_child(head);
+        this.menu.addMenuItem(header);
 
         this._list = new PopupMenu.PopupMenuSection();
         this.menu.addMenuItem(this._list);
-        this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
-        this._clean = this.menu.addAction('Clean now', () => ext.clean());
-        this._clean.setSensitive(false);
+
+        this._reap = new PopupMenu.PopupBaseMenuItem({style_class: 'ar-reap'});
+        this._reapText = label('Reap', 'ar-reap-text');
+        this._reapText.x_expand = true;
+        this._reapSize = label('', 'ar-reap-size');
+        this._reap.add_child(this._reapText);
+        this._reap.add_child(this._reapSize);
+        this._reap.connect('activate', () => ext.clean());
+        this._reap.setSensitive(false);
+        this.menu.addMenuItem(this._reap);
+
+        const foot = staticItem('ar-foot');
+        this._foot = label('Scans every hour', 'ar-foot-text', FAINT);
+        foot.add_child(this._foot);
+        this.menu.addMenuItem(foot);
+
         this.menu.connect('open-state-changed', (_menu, open) => {
             if (open)
                 ext.check(false);
         });
     }
 
+    reap() {
+        return new Promise(resolve => {
+            this._icon.ease({
+                rotation_angle_z: -35,
+                duration: 140,
+                mode: Clutter.AnimationMode.EASE_OUT_QUAD,
+                onComplete: () => this._icon.ease({
+                    rotation_angle_z: 0,
+                    duration: 260,
+                    mode: Clutter.AnimationMode.EASE_OUT_BACK,
+                }),
+            });
+            if (!this._badge.visible) {
+                resolve();
+                return;
+            }
+            this._badge.ease({
+                translation_x: -18,
+                opacity: 0,
+                duration: 320,
+                delay: 90,
+                mode: Clutter.AnimationMode.EASE_IN_QUAD,
+                onComplete: () => {
+                    this._badge.hide();
+                    this._badge.translation_x = 0;
+                    this._badge.opacity = 255;
+                    resolve();
+                },
+            });
+        });
+    }
+
     _setState(state, count) {
-        this._box.remove_style_class_name('agent-reaper-due');
-        this._box.remove_style_class_name('agent-reaper-error');
+        for (const s of ['due', 'error'])
+            this._box.remove_style_class_name(`ar-${s}`);
         if (state)
-            this._box.add_style_class_name(`agent-reaper-${state}`);
-        this._icon.icon_name = state === 'error' ? 'dialog-warning-symbolic' : ICON;
-        this._count.text = count ? String(count) : '';
+            this._box.add_style_class_name(`ar-${state}`);
+        this._badge.text = String(count);
+        this._badge.visible = count > 0;
+    }
+
+    _setFigure(text, style) {
+        this._figure.text = text;
+        for (const s of ['ar-figure-clear', 'ar-figure-error'])
+            this._figure.remove_style_class_name(s);
+        if (style)
+            this._figure.add_style_class_name(style);
     }
 
     showBusy(text) {
-        this._list.removeAll();
-        this._list.addMenuItem(infoItem(text));
-        this._clean.setSensitive(false);
+        this._sub.text = text;
+        this._reap.setSensitive(false);
     }
 
     showResult(result) {
         const rows = result.candidates;
+        const mb = megabytes(rows);
         this._list.removeAll();
-        this._list.addMenuItem(infoItem(rows.length
-            ? `${rows.length} stale processes  ·  ${megabytes(rows)} MB`
-            : 'Nothing to clean'));
-        for (const c of rows)
-            this._list.addMenuItem(infoItem(label(c)));
-        this._clean.setSensitive(rows.length > 0);
+        if (rows.length) {
+            this._setFigure(size(mb), null);
+            const agents = new Set(rows.map(c => c.agent)).size;
+            this._sub.text = `held by ${rows.length} leftover ${rows.length === 1 ? 'task' : 'tasks'} from ${agents} ${agents === 1 ? 'agent' : 'agents'}`;
+            this._fillList(rows);
+        } else {
+            this._setFigure('All clear', 'ar-figure-clear');
+            this._sub.text = 'No leftover agent tasks';
+        }
+        this._reapText.text = rows.length ? `Reap ${rows.length} ${rows.length === 1 ? 'task' : 'tasks'}` : 'Nothing to reap';
+        this._reapSize.text = rows.length ? size(mb) : '';
+        this._reap.setSensitive(rows.length > 0);
+        const now = GLib.DateTime.new_now_local();
+        this._foot.text = `Scanned ${now.format('%H:%M')}  ·  next ${now.add_seconds(CHECK_SECONDS).format('%H:%M')}`;
         this._setState(rows.length ? 'due' : null, rows.length);
+    }
+
+    _fillList(rows) {
+        let shown = 0;
+        for (const [agent, tasks] of groupByAgent(rows)) {
+            if (shown >= MAX_ROWS)
+                break;
+            this._list.addMenuItem(this._groupHeader(agent, tasks));
+            for (const c of tasks) {
+                if (shown >= MAX_ROWS)
+                    break;
+                this._list.addMenuItem(this._row(c));
+                shown++;
+            }
+        }
+        if (rows.length > shown) {
+            const more = staticItem('ar-more');
+            more.add_child(label(`+ ${rows.length - shown} more, all reaped together`, 'ar-more-text', FAINT));
+            this._list.addMenuItem(more);
+        }
+    }
+
+    _groupHeader(agent, tasks) {
+        const item = staticItem('ar-group');
+        item.add_child(new St.Widget({
+            style_class: `ar-dot ar-agent-${AGENT_STYLE[agent] ?? 'other'}`,
+            y_align: Clutter.ActorAlign.CENTER,
+        }));
+        const name = label(agent, 'ar-group-name');
+        name.x_expand = true;
+        item.add_child(name);
+        item.add_child(label(`${tasks.length}  ·  ${size(megabytes(tasks))}`, 'ar-group-meta', DIM));
+        return item;
+    }
+
+    _row(c) {
+        const item = staticItem('ar-row');
+        item.add_child(new St.Widget({style_class: `ar-bar ar-bar-${reasonStyle(c.reason)}`, y_expand: true}));
+        const body = new St.BoxLayout({vertical: true, x_expand: true});
+        body.add_child(label(taskName(c.cmd), 'ar-name'));
+        body.add_child(label(`${c.reason}  ·  ${age(c.age_h)} old`, 'ar-meta', DIM));
+        item.add_child(body);
+        item.add_child(label(size(c.rss + c.swap), 'ar-size', DIM));
+        return item;
     }
 
     showError(message) {
         this._list.removeAll();
-        this._list.addMenuItem(infoItem(`Error: ${message}`));
-        this._clean.setSensitive(false);
+        this._setFigure('Scan failed', 'ar-figure-error');
+        this._sub.text = message;
+        this._reap.setSensitive(false);
         this._setState('error', 0);
     }
 });
@@ -104,9 +271,10 @@ class Indicator extends PanelMenu.Button {
 export default class AgentReaperExtension extends Extension {
     enable() {
         this._script = GLib.build_filenamev([this.path, 'agent-reaper.py']);
+        this._gicon = Gio.icon_new_for_string(GLib.build_filenamev([this.path, 'icons', 'agent-reaper-symbolic.svg']));
         this._notified = new Set();
         this._busy = false;
-        this._indicator = new Indicator(this);
+        this._indicator = new Indicator(this, this._gicon);
         Main.panel.addToStatusArea(this.uuid, this._indicator);
         this._first = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, FIRST_CHECK_SECONDS, () => {
             this._first = 0;
@@ -129,13 +297,14 @@ export default class AgentReaperExtension extends Extension {
         this._source?.destroy();
         this._source = null;
         this._notified = null;
+        this._gicon = null;
     }
 
     async check(notify) {
         if (this._busy)
             return;
         this._busy = true;
-        this._indicator.showBusy('Checking…');
+        this._indicator.showBusy('Scanning…');
         try {
             const result = await runReaper(this._script, []);
             this._indicator?.showResult(result);
@@ -152,14 +321,14 @@ export default class AgentReaperExtension extends Extension {
         if (this._busy)
             return;
         this._busy = true;
-        this._indicator.showBusy('Cleaning…');
+        this._indicator.showBusy('Reaping…');
         try {
             const c = (await runReaper(this._script, ['--apply'])).cleanup;
             if (!this._indicator)
                 return;
-            this._notify('Agent Reaper', c
-                ? `Killed ${c.killed} of ${c.attempted} processes, freed ${c.freed_rss + c.freed_swap} MB`
-                : 'Nothing to clean');
+            await this._indicator.reap();
+            this._notify(c ? `Reaped ${c.killed} of ${c.attempted} processes` : 'Nothing to reap',
+                c ? `Freed ${size(c.freed_rss + c.freed_swap)}. Log: ~/.local/state/agent-reaper.log` : '');
         } catch (e) {
             this._indicator?.showError(e.message);
             return;
@@ -174,14 +343,14 @@ export default class AgentReaperExtension extends Extension {
         this._notified = new Set(rows.map(c => c.key));
         if (!fresh.length)
             return;
-        this._notify('Agent Reaper: cleanup due',
-            `${fresh.length} new stale processes (${megabytes(fresh)} MB). ${rows.length} stale in total.`,
-            {label: 'Clean', callback: () => this.clean()});
+        this._notify(`${size(megabytes(rows))} held by leftover agent tasks`,
+            `${fresh.length} new, ${rows.length} in total. Open Agent Reaper to review.`,
+            {label: 'Reap now', callback: () => this.clean()});
     }
 
     _notify(title, body, action) {
         if (!this._source) {
-            this._source = new MessageTray.Source({title: 'Agent Reaper', iconName: ICON});
+            this._source = new MessageTray.Source({title: 'Agent Reaper', icon: this._gicon});
             this._source.connect('destroy', () => {
                 this._source = null;
             });
