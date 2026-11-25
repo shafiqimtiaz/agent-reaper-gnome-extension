@@ -10,6 +10,8 @@ import * as MessageTray from 'resource:///org/gnome/shell/ui/messageTray.js';
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 
+import {reap as reapTasks, scan} from './reaper.js';
+
 const CHECK_SECONDS = 3600;
 const FIRST_CHECK_SECONDS = 60;
 const MAX_ROWS = 8;
@@ -20,23 +22,6 @@ const AGENT_STYLE = {
     'Claude Code': 'claude', 'Codex': 'codex', 'OpenCode': 'opencode', 'Gemini CLI': 'gemini',
     'Antigravity': 'antigravity', 'Codebuff': 'codebuff', 'pi': 'pi', 'Cursor': 'cursor',
 };
-
-function runReaper(script, args) {
-    return new Promise((resolve, reject) => {
-        const proc = Gio.Subprocess.new(['python3', script, '--json', ...args],
-            Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE);
-        proc.communicate_utf8_async(null, null, (p, res) => {
-            try {
-                const [, stdout, stderr] = p.communicate_utf8_finish(res);
-                if (!p.get_successful())
-                    throw new Error(stderr.trim() || `agent-reaper exited with ${p.get_exit_status()}`);
-                resolve(JSON.parse(stdout));
-            } catch (e) {
-                reject(e);
-            }
-        });
-    });
-}
 
 const megabytes = rows => rows.reduce((sum, c) => sum + c.rss + c.swap, 0);
 
@@ -134,10 +119,15 @@ class Indicator extends PanelMenu.Button {
         foot.add_child(this._foot);
         this.menu.addMenuItem(foot);
 
-        this.menu.connect('open-state-changed', (_menu, open) => {
+        this._menuSignal = this.menu.connect('open-state-changed', (_menu, open) => {
             if (open)
                 ext.check(false);
         });
+    }
+
+    destroy() {
+        this.menu.disconnect(this._menuSignal);
+        super.destroy();
     }
 
     reap() {
@@ -270,7 +260,7 @@ class Indicator extends PanelMenu.Button {
 
 export default class AgentReaperExtension extends Extension {
     enable() {
-        this._script = GLib.build_filenamev([this.path, 'agent-reaper.py']);
+        this._cancellable = new Gio.Cancellable();
         this._gicon = Gio.icon_new_for_string(GLib.build_filenamev([this.path, 'icons', 'agent-reaper-symbolic.svg']));
         this._notified = new Set();
         this._busy = false;
@@ -294,8 +284,13 @@ export default class AgentReaperExtension extends Extension {
         this._first = this._timer = 0;
         this._indicator?.destroy();
         this._indicator = null;
-        this._source?.destroy();
-        this._source = null;
+        this._cancellable.cancel();
+        this._cancellable = null;
+        if (this._source) {
+            this._source.disconnect(this._sourceSignal);
+            this._source.destroy();
+            this._source = null;
+        }
         this._notified = null;
         this._gicon = null;
     }
@@ -306,7 +301,7 @@ export default class AgentReaperExtension extends Extension {
         this._busy = true;
         this._indicator.showBusy('Scanning…');
         try {
-            const result = await runReaper(this._script, []);
+            const {result} = await scan(this._cancellable);
             this._indicator?.showResult(result);
             if (notify && this._indicator)
                 this._notifyNew(result.candidates);
@@ -323,7 +318,7 @@ export default class AgentReaperExtension extends Extension {
         this._busy = true;
         this._indicator.showBusy('Reaping…');
         try {
-            const c = (await runReaper(this._script, ['--apply'])).cleanup;
+            const c = (await reapTasks(this._cancellable)).cleanup;
             if (!this._indicator)
                 return;
             await this._indicator.reap();
@@ -351,7 +346,7 @@ export default class AgentReaperExtension extends Extension {
     _notify(title, body, action) {
         if (!this._source) {
             this._source = new MessageTray.Source({title: 'Agent Reaper', icon: this._gicon});
-            this._source.connect('destroy', () => {
+            this._sourceSignal = this._source.connect('destroy', () => {
                 this._source = null;
             });
             Main.messageTray.add(this._source);

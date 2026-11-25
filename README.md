@@ -36,7 +36,7 @@ Of those, it reaps only what is older than one hour and is:
 Live sessions and their tasks, tasks in an open terminal, and anything without
 an agent marker are never touched. Neither are the session that runs the
 scan, browsers, databases, Docker, Ollama, GNOME or the apps in `PROTECT`
-in `agent-reaper.py`.
+in `reaper.js`.
 
 ## How it works
 
@@ -50,7 +50,7 @@ in `agent-reaper.py`.
 
 ## Install
 
-Requires GNOME Shell 46 and Python 3.
+Requires GNOME Shell 46. Everything is plain GJS; nothing else to install.
 
 ```sh
 git clone https://github.com/shafiqimtiaz/agent-reaper-gnome-extension.git
@@ -69,16 +69,16 @@ gnome-extensions enable agent-reaper@shafiqimtiaz.github.io
 The script also works on its own. It is a dry run unless you add `--apply`.
 
 ```sh
-python3 agent-reaper.py              # list stale processes
-python3 agent-reaper.py --apply      # kill them
-python3 agent-reaper.py --min-age 6h # only older than 6 hours
-python3 agent-reaper.py --json       # output for scripts
+./agent-reaper.js              # list leftovers
+./agent-reaper.js --apply      # reap them
+./agent-reaper.js --min-age 6h # only older than 6 hours
+./agent-reaper.js --json       # output for scripts
 ```
 
 ## Tests
 
 ```sh
-python3 -m unittest test_agent_reaper
+gjs -m test_reaper.js
 ```
 
 ## License
