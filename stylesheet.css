@@ -1,0 +1,13 @@
+.agent-reaper-due .system-status-icon,
+.agent-reaper-due .agent-reaper-count {
+  color: #f5a623;
+}
+
+.agent-reaper-error .system-status-icon {
+  color: #e01b24;
+}
+
+.agent-reaper-count {
+  margin-left: 4px;
+  font-weight: bold;
+}
