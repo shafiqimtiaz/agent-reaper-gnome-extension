@@ -1,3 +1,7 @@
+.ar-auto .system-status-icon {
+  color: #6fd39b;
+}
+
 .ar-due .system-status-icon {
   color: #ff7a3d;
 }
@@ -14,6 +18,10 @@
   color: #1c1410;
   font-size: 8.5pt;
   font-weight: 800;
+}
+
+.ar-reaped .ar-badge {
+  background-color: #6fd39b;
 }
 
 .ar-menu {
@@ -133,6 +141,10 @@
 
 .ar-more-text {
   font-size: 8.5pt;
+}
+
+.popup-menu-item.ar-switch {
+  padding: 8px 20px;
 }
 
 .popup-menu-item.ar-reap {

@@ -13,6 +13,7 @@ import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import {reap as reapTasks, scan} from './reaper.js';
 
 const CHECK_SECONDS = 3600;
+const AUTO_SECONDS = 900;
 const FIRST_CHECK_SECONDS = 60;
 const MAX_ROWS = 8;
 const DIM = 140;
@@ -22,6 +23,32 @@ const AGENT_STYLE = {
     'Claude Code': 'claude', 'Codex': 'codex', 'OpenCode': 'opencode', 'Gemini CLI': 'gemini',
     'Antigravity': 'antigravity', 'Codebuff': 'codebuff', 'pi': 'pi', 'Cursor': 'cursor',
 };
+
+function modePath() {
+    return GLib.build_filenamev([GLib.get_user_state_dir(), 'agent-reaper-mode']);
+}
+
+function readMode() {
+    try {
+        return new TextDecoder().decode(GLib.file_get_contents(modePath())[1]).trim() === 'auto';
+    } catch {
+        return false;
+    }
+}
+
+function writeMode(auto) {
+    const file = Gio.File.new_for_path(modePath());
+    try {
+        file.get_parent().make_directory_with_parents(null);
+    } catch {
+    }
+    try {
+        file.replace_contents(new TextEncoder().encode(auto ? 'auto' : 'manual'),
+            null, false, Gio.FileCreateFlags.REPLACE_DESTINATION, null);
+    } catch (e) {
+        logError(e, 'Could not save the Agent Reaper mode');
+    }
+}
 
 const megabytes = rows => rows.reduce((sum, c) => sum + c.rss + c.swap, 0);
 
@@ -78,6 +105,8 @@ const Indicator = GObject.registerClass(
 class Indicator extends PanelMenu.Button {
     _init(ext, gicon) {
         super._init(0.0, 'Agent Reaper');
+        this._autoMode = ext.auto;
+        this._lastScan = null;
         this._box = new St.BoxLayout({style_class: 'panel-status-menu-box ar-panel'});
         this._icon = new St.Icon({gicon, style_class: 'system-status-icon'});
         this._icon.set_pivot_point(0.5, 0.9);
@@ -101,6 +130,11 @@ class Indicator extends PanelMenu.Button {
         header.add_child(head);
         this.menu.addMenuItem(header);
 
+        this._autoSwitch = new PopupMenu.PopupSwitchMenuItem('Auto reap every 15 minutes', ext.auto);
+        this._autoSwitch.add_style_class_name('ar-switch');
+        this._autoSwitch.connect('toggled', (_item, state) => ext.setAuto(state));
+        this.menu.addMenuItem(this._autoSwitch);
+
         this._list = new PopupMenu.PopupMenuSection();
         this.menu.addMenuItem(this._list);
 
@@ -118,6 +152,7 @@ class Indicator extends PanelMenu.Button {
         this._foot = label('Scans every hour', 'ar-foot-text', FAINT);
         foot.add_child(this._foot);
         this.menu.addMenuItem(foot);
+        this.setAuto(ext.auto);
 
         this._menuSignal = this.menu.connect('open-state-changed', (_menu, open) => {
             if (open)
@@ -163,7 +198,7 @@ class Indicator extends PanelMenu.Button {
     }
 
     _setState(state, count) {
-        for (const s of ['due', 'error'])
+        for (const s of ['due', 'error', 'reaped'])
             this._box.remove_style_class_name(`ar-${s}`);
         if (state)
             this._box.add_style_class_name(`ar-${state}`);
@@ -200,9 +235,52 @@ class Indicator extends PanelMenu.Button {
         this._reapText.text = rows.length ? `Reap ${rows.length} ${rows.length === 1 ? 'task' : 'tasks'}` : 'Nothing to reap';
         this._reapSize.text = rows.length ? size(mb) : '';
         this._reap.setSensitive(rows.length > 0);
-        const now = GLib.DateTime.new_now_local();
-        this._foot.text = `Scanned ${now.format('%H:%M')}  ·  next ${now.add_seconds(CHECK_SECONDS).format('%H:%M')}`;
+        this._lastScan = GLib.DateTime.new_now_local();
+        this._refreshFoot();
         this._setState(rows.length ? 'due' : null, rows.length);
+    }
+
+    showSweep(result) {
+        const c = result.cleanup;
+        const killed = c ? c.killed : 0;
+        const freed = c ? c.freed_rss + c.freed_swap : 0;
+        this._list.removeAll();
+        this._lastScan = GLib.DateTime.new_now_local();
+        if (killed) {
+            this._setFigure(`−${size(freed)}`, 'ar-figure-clear');
+            this._sub.text = `Auto-reaped ${killed} ${killed === 1 ? 'task' : 'tasks'}`;
+        } else {
+            this._setFigure('All clear', 'ar-figure-clear');
+            this._sub.text = 'Nothing to reap';
+        }
+        this._reapText.text = 'Nothing to reap';
+        this._reapSize.text = '';
+        this._reap.setSensitive(false);
+        this._refreshFoot();
+        this._setState(killed ? 'reaped' : null, killed);
+    }
+
+    setAuto(auto) {
+        this._autoMode = auto;
+        if (auto)
+            this._box.add_style_class_name('ar-auto');
+        else
+            this._box.remove_style_class_name('ar-auto');
+        if (this._autoSwitch.state !== auto)
+            this._autoSwitch.setToggleState(auto);
+        this._refreshFoot();
+    }
+
+    _refreshFoot() {
+        if (this._autoMode) {
+            this._foot.text = this._lastScan
+                ? `Auto every 15 min  ·  next ${this._lastScan.add_seconds(AUTO_SECONDS).format('%H:%M')}`
+                : 'Auto · clears every 15 min';
+        } else {
+            this._foot.text = this._lastScan
+                ? `Scanned ${this._lastScan.format('%H:%M')}  ·  next ${this._lastScan.add_seconds(CHECK_SECONDS).format('%H:%M')}`
+                : 'Scans every hour';
+        }
     }
 
     _fillList(rows) {
@@ -264,8 +342,44 @@ export default class AgentReaperExtension extends Extension {
         this._gicon = Gio.icon_new_for_string(GLib.build_filenamev([this.path, 'icons', 'agent-reaper-symbolic.svg']));
         this._notified = new Set();
         this._busy = false;
+        this._auto = readMode();
+        this._first = this._timer = 0;
         this._indicator = new Indicator(this, this._gicon);
         Main.panel.addToStatusArea(this.uuid, this._indicator);
+        this._schedule();
+    }
+
+    get auto() {
+        return this._auto;
+    }
+
+    setAuto(auto) {
+        if (this._auto === auto)
+            return;
+        this._auto = auto;
+        writeMode(auto);
+        this._indicator?.setAuto(auto);
+        this._schedule();
+        if (auto)
+            this.sweep();
+        else
+            this.check(false);
+    }
+
+    _schedule() {
+        for (const id of ['_first', '_timer']) {
+            if (this[id]) {
+                GLib.source_remove(this[id]);
+                this[id] = 0;
+            }
+        }
+        if (this._auto) {
+            this._timer = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, AUTO_SECONDS, () => {
+                this.sweep();
+                return GLib.SOURCE_CONTINUE;
+            });
+            return;
+        }
         this._first = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, FIRST_CHECK_SECONDS, () => {
             this._first = 0;
             this.check(true);
@@ -280,8 +394,10 @@ export default class AgentReaperExtension extends Extension {
     disable() {
         if (this._first)
             GLib.source_remove(this._first);
-        GLib.source_remove(this._timer);
+        if (this._timer)
+            GLib.source_remove(this._timer);
         this._first = this._timer = 0;
+        this._auto = false;
         this._indicator?.destroy();
         this._indicator = null;
         this._cancellable.cancel();
@@ -293,6 +409,25 @@ export default class AgentReaperExtension extends Extension {
         }
         this._notified = null;
         this._gicon = null;
+    }
+
+    async sweep() {
+        if (this._busy)
+            return;
+        this._busy = true;
+        this._indicator?.showBusy('Auto reaping…');
+        try {
+            const result = await reapTasks(this._cancellable);
+            if (!this._indicator)
+                return;
+            if (result.cleanup?.killed)
+                await this._indicator.reap();
+            this._indicator.showSweep(result);
+        } catch (e) {
+            this._indicator?.showError(e.message);
+        } finally {
+            this._busy = false;
+        }
     }
 
     async check(notify) {
@@ -322,8 +457,10 @@ export default class AgentReaperExtension extends Extension {
             if (!this._indicator)
                 return;
             await this._indicator.reap();
-            this._notify(c ? `Reaped ${c.killed} of ${c.attempted} processes` : 'Nothing to reap',
-                c ? `Freed ${size(c.freed_rss + c.freed_swap)}. Log: ~/.local/state/agent-reaper.log` : '');
+            if (!this._auto) {
+                this._notify(c ? `Reaped ${c.killed} of ${c.attempted} processes` : 'Nothing to reap',
+                    c ? `Freed ${size(c.freed_rss + c.freed_swap)}. Log: ~/.local/state/agent-reaper.log` : '');
+            }
         } catch (e) {
             this._indicator?.showError(e.message);
             return;

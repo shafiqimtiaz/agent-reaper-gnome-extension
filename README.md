@@ -38,15 +38,30 @@ an agent marker are never touched. Neither are the session that runs the
 scan, browsers, databases, Docker, Ollama, GNOME or the apps in `PROTECT`
 in `reaper.js`.
 
+## Modes
+
+The menu has an **Auto reap every 15 minutes** switch. The choice is remembered
+between sessions in `~/.local/state/agent-reaper-mode`.
+
+- **Manual** (default): checks every hour in the background and notifies you
+  when new stale processes appear. The notification has a **Reap now** button.
+  Nothing is killed until you reap.
+- **Auto**: reaps every 15 minutes by itself and never shows a notification.
+  The icon carries everything instead:
+  - green scythe: auto mode is armed, nothing needs attention
+  - orange scythe with a count: leftovers are waiting for the next sweep
+  - green badge with a number: that many tasks were reaped by the last sweep
+  - red scythe: the last scan or reap failed; open the menu for the error
+
 ## How it works
 
 - Click the icon: it shows the leftovers grouped by agent, with the reason, age and memory of each.
-- **Clean now** kills them: children first, then the parent. It sends SIGTERM,
+- **Reap** kills them: children first, then the parent. It sends SIGTERM,
   waits 5 seconds, then sends SIGKILL to what is left. Each kill is logged to
-  `~/.local/state/agent-reaper.log`.
-- Every hour it checks in the background and notifies you when new stale
-  processes appear. The notification has a **Clean** button.
-- The number left of the scythe counts the leftovers. It swipes away when you reap.
+  `~/.local/state/agent-reaper.log`. In manual mode the result is also shown as a
+  notification; in auto mode the badge shows it.
+- The number left of the scythe counts what the icon is reporting: leftovers in
+  manual mode, tasks reaped by the last sweep in auto mode. It swipes away when you reap.
 
 ## Install
 
