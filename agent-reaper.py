@@ -3,11 +3,14 @@ import argparse, json, os, re, signal, sys, time
 
 CLK = os.sysconf("SC_CLK_TCK")
 ME = os.getuid()
-AGENT = re.compile(r"claude|codex|opencode|freebuff|manicode|codebuff|\bpi\b|pilot|chrome-devtools-mcp|mcp|npm exec|npx|lightpanda")
-DEV = re.compile(r"npm run|pnpm|yarn|vite|esbuild|tsx|webpack|next dev|tsc.*--watch|nodemon")
-IDLE = re.compile(r"^(/usr)?(/bin/)?sleep\b")
-SHELL = {"bash", "sh", "zsh", "dash", "fish"}
-SPAWN = re.compile(r"multiprocessing\.(spawn|resource_tracker)")
+AGENT_BIN = {"claude": "Claude Code", "codex": "Codex", "opencode": "OpenCode", "gemini": "Gemini CLI",
+             "freebuff": "Codebuff", "codebuff": "Codebuff", "pi": "pi", "cursor-agent": "Cursor",
+             "aider": "Aider", "goose": "Goose", "crush": "Crush", "amp": "Amp"}
+MARKERS = [("CLAUDECODE", "Claude Code", "CLAUDE_PID"), ("CLAUDE_CODE_ENTRYPOINT", "Claude Code", "CLAUDE_PID"),
+           ("OPENCODE", "OpenCode", None), ("CODEX_THREAD_ID", "Codex", None), ("CODEX_SESSION_ID", "Codex", None),
+           ("CODEX_SANDBOX", "Codex", None), ("GEMINI_CLI", "Gemini CLI", None),
+           ("CODEBUFF_LAUNCHER_PID", "Codebuff", "CODEBUFF_LAUNCHER_PID"), ("PI_CODING_AGENT", "pi", None),
+           ("CURSOR_AGENT", "Cursor", None)]
 PROTECT = re.compile(r"ollama|llama-server|^hex\b|/hex\b|herdr|stack_tray|containerd|dockerd|docker-proxy|postgres|mongod|mysqld|brave|(^|/)(google-)?chrome( |$)|desktop-plus|headroom serve|headroom proxy|gnome|tracker-miner|tracker3|evolution|Xorg|Xwayland|pipewire|wireplumber|dbus|systemd")
 
 
@@ -40,11 +43,13 @@ def snapshot():
         except OSError:
             cwd = ""
         pid = int(name)
+        env = dict(kv.split(b"=", 1) for kv in read(f"/proc/{name}/environ").split(b"\0") if b"=" in kv)
         procs[pid] = dict(
             pid=pid, comm=raw[raw.index("(") + 1:raw.rindex(")")], state=rest[0], ppid=int(rest[1]),
             tty=int(rest[4]), start=int(rest[19]), age=up - int(rest[19]) / CLK,
             cmd=read(f"/proc/{name}/cmdline").replace(b"\0", b" ").decode(errors="replace").strip(), cwd=cwd,
-            rss=int(rss.group(1)) // 1024 if rss else 0, swap=int(swap.group(1)) // 1024 if swap else 0)
+            rss=int(rss.group(1)) // 1024 if rss else 0, swap=int(swap.group(1)) // 1024 if swap else 0,
+            env={k.decode(errors="replace"): v.decode(errors="replace") for k, v in env.items()})
     return procs
 
 
@@ -88,9 +93,19 @@ def own_session(procs, kids, roots):
     return {pid, *descendants(kids, pid)}
 
 
-def only_agent_work(procs, kids, pid):
-    below = [procs[c] for c in descendants(kids, pid) if c in procs and procs[c]["state"] != "Z"]
-    return bool(below) and all(AGENT.search(text(p)) or DEV.search(text(p)) or IDLE.search(p["cmd"]) for p in below)
+def owner(env):
+    for key, name, pid_var in MARKERS:
+        if key in env:
+            pid = env.get(pid_var or "", "")
+            return name, int(pid) if pid.isdigit() else None
+    if any("/antigravity" in v for v in env.values()):
+        return "Antigravity", None
+    return None, None
+
+
+def agent_binary(p):
+    first = p["cmd"].split(" ", 1)[0] if p["cmd"] else p["comm"]
+    return AGENT_BIN.get(os.path.basename(first))
 
 
 def candidates(procs, min_age):
@@ -99,25 +114,28 @@ def candidates(procs, min_age):
     safe = own_session(procs, kids, roots)
     found = {}
 
-    def add(p, reason):
-        if p["pid"] not in safe and p["state"] != "Z" and not protected(p):
-            found.setdefault(p["pid"], reason)
+    def add(p, agent, reason):
+        if p["pid"] not in safe and not protected(p):
+            found.setdefault(p["pid"], (agent, reason))
 
     for p in procs.values():
-        if p["age"] < min_age:
+        if p["age"] < min_age or p["state"] == "Z":
             continue
         orphan = p["ppid"] in roots
-        t = text(p)
-        if p["state"] in ("T", "t") and orphan and AGENT.search(t):
-            add(p, "stopped orphaned agent process")
-        elif orphan and p["comm"] in SHELL and p["tty"] == 0 and only_agent_work(procs, kids, p["pid"]):
-            add(p, "orphaned shell running agent work")
-        elif orphan and SPAWN.search(t):
-            add(p, "orphaned multiprocessing worker")
-        elif orphan and p["tty"] == 0 and "mcp" in t and AGENT.search(t):
-            add(p, "orphaned MCP server")
-        elif DEV.search(t) and p["cwd"].endswith("(deleted)"):
-            add(p, "dev server on deleted directory")
+        agent = agent_binary(p)
+        if agent:
+            if p["state"] in ("T", "t") and orphan:
+                add(p, agent, "stopped session")
+            continue
+        name, owner_pid = owner(p["env"])
+        if not name:
+            continue
+        if orphan:
+            add(p, name, "orphaned task")
+        elif owner_pid is not None and owner_pid not in procs and p["tty"] == 0:
+            add(p, name, "left by closed session")
+        elif p["cwd"].endswith("(deleted)"):
+            add(p, name, "folder deleted")
 
     zombie_count = {}
     for p in procs.values():
@@ -125,9 +143,19 @@ def candidates(procs, min_age):
             zombie_count[p["ppid"]] = zombie_count.get(p["ppid"], 0) + 1
     for parent, n in zombie_count.items():
         p = procs.get(parent)
-        if p and n >= 3 and p["age"] >= min_age and AGENT.search(text(p)) and (p["state"] in ("T", "t") or p["ppid"] in roots):
-            add(p, f"agent holding {n} zombies")
-    return found, kids
+        agent = p and agent_binary(p)
+        if agent and n >= 3 and p["age"] >= min_age and (p["state"] in ("T", "t") or p["ppid"] in roots):
+            add(p, agent, f"holding {n} zombies")
+
+    def under_candidate(pid):
+        pid = procs[pid]["ppid"]
+        while pid in procs:
+            if pid in found:
+                return True
+            pid = procs[pid]["ppid"]
+        return False
+
+    return {pid: v for pid, v in found.items() if not under_candidate(pid)}, kids
 
 
 def kill_order(procs, kids, pids):
@@ -160,7 +188,8 @@ def apply(procs, kids, found):
     os.makedirs(os.path.dirname(log), exist_ok=True)
     with open(log, "a") as f:
         for pid in order:
-            f.write(f"{time.strftime('%F %T')} kill {pid} {found.get(pid, 'child')} {text(procs[pid])[:120]}\n")
+            agent, reason = found.get(pid, ("", "child"))
+            f.write(f"{time.strftime('%F %T')} kill {pid} {agent} {reason} {text(procs[pid])[:120]}\n")
     signal_all(order, signal.SIGTERM)
     signal_all(order, signal.SIGCONT)
     time.sleep(5)
@@ -184,9 +213,10 @@ def main():
 
     procs = snapshot()
     found, kids = candidates(procs, min_age)
-    rows = [dict(pid=pid, key=f"{pid}:{procs[pid]['start']}", reason=reason, age_h=round(procs[pid]["age"] / 3600, 1),
-                 rss=procs[pid]["rss"], swap=procs[pid]["swap"], cmd=text(procs[pid])[:120])
-            for pid, reason in sorted(found.items(), key=lambda kv: (kv[1], kv[0]))]
+    rows = [dict(pid=pid, key=f"{pid}:{procs[pid]['start']}", agent=agent, reason=reason,
+                 age_h=round(procs[pid]["age"] / 3600, 1), rss=procs[pid]["rss"], swap=procs[pid]["swap"],
+                 cmd=text(procs[pid])[:120])
+            for pid, (agent, reason) in sorted(found.items(), key=lambda kv: (kv[1], kv[0]))]
     result = dict(processes=len(procs), zombies=sum(1 for p in procs.values() if p["state"] == "Z"), candidates=rows)
     if args.apply and found:
         result["cleanup"] = apply(procs, kids, found)
@@ -196,7 +226,7 @@ def main():
         return
     print(f"{result['processes']} processes of yours, {result['zombies']} zombies, min age {args.min_age}")
     for r in rows:
-        print(f"{r['reason']:36} pid {r['pid']:<8} {r['age_h']:5.1f}h {r['rss']:5}MB rss {r['swap']:5}MB swap  {r['cmd'][:70]}")
+        print(f"{r['agent']:12} {r['reason']:24} pid {r['pid']:<8} {r['age_h']:5.1f}h {r['rss']:5}MB rss {r['swap']:5}MB swap  {r['cmd'][:70]}")
     if not rows:
         print("nothing to clean")
     elif "cleanup" in result:

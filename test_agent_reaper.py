@@ -8,11 +8,12 @@ spec.loader.exec_module(reaper)
 
 SYSTEMD = 2457
 DAY = 86400
+CLAUDE = {"CLAUDECODE": "1", "CLAUDE_PID": "4000"}
 
 
-def proc(pid, ppid, cmd, state="S", tty=0, age=DAY, cwd="/home/u", comm=None):
-    return dict(pid=pid, ppid=ppid, cmd=cmd, state=state, tty=tty, age=age, cwd=cwd,
-                comm=comm or os.path.basename(cmd.split()[0]) if cmd else comm, rss=10, swap=20, docker=False)
+def proc(pid, ppid, cmd, state="S", tty=0, age=DAY, cwd="/home/u", comm=None, env=None):
+    return dict(pid=pid, ppid=ppid, cmd=cmd, state=state, tty=tty, age=age, cwd=cwd, start=pid,
+                comm=comm or (os.path.basename(cmd.split()[0]) if cmd else ""), rss=10, swap=20, env=env or {})
 
 
 def table(*procs):
@@ -22,6 +23,16 @@ def table(*procs):
 
 def zombies(parent, first, count):
     return [proc(first + i, parent, "", state="Z", comm="node") for i in range(count)]
+
+
+class Owner(unittest.TestCase):
+    def test_markers_name_the_agent(self):
+        cases = [(CLAUDE, "Claude Code"), ({"OPENCODE": "1"}, "OpenCode"), ({"CODEX_THREAD_ID": "t"}, "Codex"),
+                 ({"GEMINI_CLI": "1"}, "Gemini CLI"), ({"PI_CODING_AGENT": "true"}, "pi"),
+                 ({"CODEBUFF_LAUNCHER_PID": "9"}, "Codebuff"),
+                 ({"VSCODE_GIT_ASKPASS_NODE": "/usr/share/antigravity/antigravity"}, "Antigravity"), ({}, None)]
+        for env, name in cases:
+            self.assertEqual(reaper.owner(env)[0], name, env)
 
 
 class Rules(unittest.TestCase):
@@ -36,14 +47,29 @@ class Rules(unittest.TestCase):
         procs = table(proc(600, SYSTEMD, "claude --chrome", state="T"), *zombies(600, 601, 5))
         self.assertIn(600, self.found(procs))
 
-    def test_orphan_shell_running_user_job_is_kept(self):
+    def test_orphan_without_agent_marker_is_kept(self):
         procs = table(proc(700, SYSTEMD, "bash backfill.sh", comm="bash"), proc(701, 700, "python3 migrate.py"))
-        self.assertNotIn(700, self.found(procs))
+        self.assertEqual(self.found(procs), {})
 
-    def test_orphan_shell_running_dev_server_is_found(self):
-        procs = table(proc(800, SYSTEMD, "bash -c ui", comm="bash"), proc(801, 800, "npm run start:dev"),
-                      proc(802, 801, "node /repo/node_modules/.bin/vite"))
-        self.assertIn(800, self.found(procs))
+    def test_orphaned_agent_task_is_found_once(self):
+        procs = table(proc(800, SYSTEMD, "bash -c ui", comm="bash", env=CLAUDE),
+                      proc(801, 800, "npm run start:dev", env=CLAUDE),
+                      proc(802, 801, "node /repo/node_modules/.bin/vite", env=CLAUDE))
+        found = self.found(procs)
+        self.assertEqual(list(found), [800])
+        self.assertEqual(found[800][0], "Claude Code")
+
+    def test_task_of_live_agent_is_kept(self):
+        procs = table(proc(4000, 3000, "claude", tty=34816), proc(801, 4000, "npm run dev", env=CLAUDE))
+        self.assertEqual(self.found(procs), {})
+
+    def test_detached_task_of_closed_agent_is_found(self):
+        procs = table(proc(3000, SYSTEMD, "herdr-core"), proc(801, 3000, "node server.js", env=CLAUDE))
+        self.assertIn(801, self.found(procs))
+
+    def test_task_of_closed_agent_in_open_terminal_is_kept(self):
+        procs = table(proc(3000, SYSTEMD, "bash", tty=34817), proc(801, 3000, "vite", tty=34817, env=CLAUDE))
+        self.assertEqual(self.found(procs), {})
 
     def test_young_process_is_kept(self):
         procs = table(proc(900, SYSTEMD, "claude --chrome", state="T", age=60))
