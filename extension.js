@@ -24,24 +24,6 @@ const AGENT_STYLE = {
     'Antigravity': 'antigravity', 'Codebuff': 'codebuff', 'pi': 'pi', 'Cursor': 'cursor',
 };
 
-function modePath() {
-    return GLib.build_filenamev([GLib.get_user_state_dir(), 'agent-reaper-mode']);
-}
-
-function readMode() {
-    try {
-        return new TextDecoder().decode(GLib.file_get_contents(modePath())[1]).trim() === 'auto';
-    } catch {
-        return false;
-    }
-}
-
-// Carry an auto mode picked in 2.2 over to GSettings.
-function migrateMode(settings) {
-    if (settings.get_user_value('auto-reap') === null && readMode())
-        settings.set_boolean('auto-reap', true);
-}
-
 const megabytes = rows => rows.reduce((sum, c) => sum + c.rss + c.swap, 0);
 
 function size(mb) {
@@ -335,7 +317,6 @@ export default class AgentReaperExtension extends Extension {
         this._notified = new Set();
         this._busy = false;
         this._settings = this.getSettings();
-        migrateMode(this._settings);
         this._auto = this._settings.get_boolean('auto-reap');
         this._settingsSignal = this._settings.connect('changed', (_settings, key) => {
             if (key === 'auto-reap')
@@ -369,11 +350,13 @@ export default class AgentReaperExtension extends Extension {
     }
 
     _schedule() {
-        for (const id of ['_first', '_timer']) {
-            if (this[id]) {
-                GLib.source_remove(this[id]);
-                this[id] = 0;
-            }
+        if (this._first) {
+            GLib.source_remove(this._first);
+            this._first = 0;
+        }
+        if (this._timer) {
+            GLib.source_remove(this._timer);
+            this._timer = 0;
         }
         if (this._auto) {
             this._timer = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, AUTO_SECONDS, () => {

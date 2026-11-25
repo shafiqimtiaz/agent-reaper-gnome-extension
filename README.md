@@ -42,8 +42,7 @@ in `reaper.js`.
 ## Modes
 
 The menu has an **Auto reap every 15 minutes** switch, and so does the settings
-window (see below). The choice is stored in GSettings; a mode saved by 2.2 in
-`~/.local/state/agent-reaper-mode` is picked up on the first start.
+window (see below). The choice is stored in GSettings.
 
 - **Manual** (default): checks every hour in the background and notifies you
   when new stale processes appear. The notification has a **Reap now** button.
